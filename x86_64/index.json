@@ -1,0 +1,49 @@
+{
+  "packages": [
+    {
+      "info": {
+        "name": "hello",
+        "version": "2.12.1",
+        "release": "1",
+        "desc": "GNU Hello: the classic first program",
+        "url": "https://www.gnu.org/software/hello/",
+        "license": "GPL-3.0-or-later",
+        "arch": "x86_64",
+        "depends": [
+          "glibc"
+        ],
+        "provides": [],
+        "conflicts": [],
+        "backup": [],
+        "size": 355843,
+        "builddate": 1792161684
+      },
+      "filename": "hello-2.12.1-1-x86_64.tek",
+      "sha256": "ed92ecb422fdbfae641d7411ba3cf0f68f7d411259dd8c61e81b7217e221cef3",
+      "csize": 130397
+    },
+    {
+      "info": {
+        "name": "htop",
+        "version": "3.3.0",
+        "release": "1",
+        "desc": "Interactive process viewer",
+        "url": "https://htop.dev",
+        "license": "GPL-2.0-or-later",
+        "arch": "x86_64",
+        "depends": [
+          "glibc",
+          "ncurses"
+        ],
+        "provides": [],
+        "conflicts": [],
+        "backup": [],
+        "size": 1551111,
+        "builddate": 1792161696
+      },
+      "filename": "htop-3.3.0-1-x86_64.tek",
+      "sha256": "c39195c57116dd59d7b08981b68f97d9a29359339fbe478f325e1b80b7ba5854",
+      "csize": 627949
+    }
+  ]
+}
