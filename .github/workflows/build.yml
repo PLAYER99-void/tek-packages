@@ -1,0 +1,115 @@
+# Tek package bot (copied to PLAYER99-void/tek-packages as .github/workflows/build.yml).
+# One run builds one wave of tools/repo/plan.json in parallel jobs inside the tek-builder container, uploads the
+# packages to the shard releases pkgs-0..9 and merges their index.json. When a wave is done, the next one starts.
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      wave: { description: "wave number (0 = first)", default: "0" }
+      jobs: { description: "parallel jobs", default: "20" }
+      limit: { description: "max bases in this run (0 = whole wave)", default: "0" }
+      chain: { description: "start the next wave when done", default: "true" }
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency: { group: build, cancel-in-progress: false }
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.split.outputs.shards }}
+      waves: ${{ steps.split.outputs.waves }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: split
+        run: |
+          python3 - <<'PY'
+          import json, os
+          p = json.load(open("bot/plan.json"))
+          w, n, lim = int("${{ inputs.wave }}"), int("${{ inputs.jobs }}"), int("${{ inputs.limit }}")
+          bases = p["waves"][w]["bases"]
+          bases = bases[:lim] if lim else bases
+          # longest-first round robin keeps the jobs about even (big packages have many binary packages)
+          bases.sort(key=lambda b: -len(p["bases"][b]["pkgs"]))
+          parts = [[] for _ in range(min(n, len(bases)) or 1)]
+          for i, b in enumerate(bases):
+              parts[i % len(parts)].append(f'{b} {p["bases"][b]["pkgs"][0]}')
+          os.makedirs("lists", exist_ok=True)
+          for i, part in enumerate(parts):
+              open(f"lists/{i}.txt", "w").write("\n".join(part) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              o.write(f"shards={json.dumps(list(range(len(parts))))}\nwaves={len(p['waves'])}\n")
+          print(f"wave {w}: {len(bases)} bases in {len(parts)} jobs")
+          PY
+      - uses: actions/upload-artifact@v4
+        with: { name: lists, path: lists }
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix: { shard: "${{ fromJson(needs.plan.outputs.shards) }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: lists, path: lists }
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL; df -h /
+      - name: Builder container
+        run: |
+          gh release download builder -p tek-builder.tar.zst -R ${{ github.repository }}
+          gh release download builder -p tek -D bot -R ${{ github.repository }} && chmod +x bot/tek
+          docker import tek-builder.tar.zst tek-builder
+        env: { GH_TOKEN: "${{ github.token }}" }
+      - name: Build
+        run: |
+          mkdir -p out
+          docker run --rm -v $PWD/bot:/bot:ro -v $PWD/lists:/lists:ro -v $PWD/out:/out tek-builder \
+            bash /bot/bot.sh /lists/${{ matrix.shard }}.txt /out
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: "out-${{ matrix.shard }}", path: out, retention-days: 7 }
+
+  publish:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: "out-*", path: outs }
+      - name: Upload packages, merge the shard indexes
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          R=${{ github.repository }}
+          for k in 0 1 2 3 4 5 6 7 8 9; do
+            gh release view pkgs-$k -R $R >/dev/null 2>&1 || gh release create pkgs-$k -R $R -t "Tek packages, shard $k" -n "Built by the Tek package bot." >/dev/null
+            mkdir -p work/pkgs-$k; gh release download pkgs-$k -p index.json -D work/pkgs-$k -R $R 2>/dev/null || true
+          done
+          frags=$(ls outs/*/pkgs/index.json 2>/dev/null)
+          [ -n "$frags" ] || { echo "nothing built"; exit 0; }
+          python3 bot/merge-index.py work $frags > uploads.txt
+          for k in 0 1 2 3 4 5 6 7 8 9; do
+            files=$(awk -v k=$k '$1 == k {print $2}' uploads.txt)
+            [ -n "$files" ] && gh release upload pkgs-$k $files --clobber -R $R
+            gh release upload pkgs-$k work/pkgs-$k/index.json --clobber -R $R
+          done
+      - name: Report
+        if: always()
+        run: |
+          cat outs/*/status.tsv > status.tsv 2>/dev/null || true
+          ok=$(grep -c $'\tok\t' status.tsv || true); bad=$(grep -c $'\tfail\t' status.tsv || true)
+          { echo "## Wave ${{ inputs.wave }}: $ok built, $bad failed"; echo; echo '| base | result | seconds | reason |'; echo '|---|---|---|---|'
+            sort -k2,2r status.tsv | awk -F'\t' '{printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4}'; } >> $GITHUB_STEP_SUMMARY
+      - name: Next wave
+        if: inputs.chain == 'true' && inputs.limit == '0'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          n=$(( ${{ inputs.wave }} + 1 ))
+          [ $n -lt ${{ needs.plan.outputs.waves }} ] && gh workflow run build.yml -R ${{ github.repository }} -f wave=$n -f jobs=${{ inputs.jobs }} || echo "all waves done"
