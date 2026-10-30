@@ -10,6 +10,7 @@ on:
       jobs: { description: "parallel jobs", default: "20" }
       limit: { description: "max bases in this run (0 = whole wave)", default: "0" }
       chain: { description: "start the next wave when done", default: "true" }
+      only: { description: "file of bases to build instead of everything, e.g. bot/priority.txt (waves without one are skipped; published ones too)", default: "" }
 
 permissions:
   contents: write
@@ -25,6 +26,12 @@ jobs:
       waves: ${{ steps.split.outputs.waves }}
     steps:
       - uses: actions/checkout@v4
+      - name: Published packages (only mode)
+        if: inputs.only != ''
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          mkdir -p pub
+          for k in 0 1 2 3 4 5 6 7 8 9; do gh release download pkgs-$k -p index.json -O pub/$k.json -R ${{ github.repository }} 2>/dev/null || true; done
       - id: split
         run: |
           python3 - <<'PY'
@@ -32,6 +39,14 @@ jobs:
           p = json.load(open("bot/plan.json"))
           w, n, lim = int("${{ inputs.wave }}"), int("${{ inputs.jobs }}"), int("${{ inputs.limit }}")
           bases = p["waves"][w]["bases"]
+          only = "${{ inputs.only }}"
+          if only:   # a custom list: its bases of this wave that are not published yet (a wave keeps the dependency order)
+              want = {l.split()[0] for l in open(only) if l.strip() and not l.startswith("#")}
+              have = set()
+              for k in range(10):
+                  try: have |= {e["info"]["name"] for e in json.load(open(f"pub/{k}.json"))["packages"]}
+                  except (OSError, ValueError): pass
+              bases = [b for b in bases if b in want and p["bases"][b]["pkgs"][0] not in have]
           bases = bases[:lim] if lim else bases
           # longest-first round robin keeps the jobs about even (big packages have many binary packages)
           bases.sort(key=lambda b: -len(p["bases"][b]["pkgs"]))
@@ -112,4 +127,15 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           n=$(( ${{ inputs.wave }} + 1 ))
-          [ $n -lt ${{ needs.plan.outputs.waves }} ] && gh workflow run build.yml -R ${{ github.repository }} -f wave=$n -f jobs=${{ inputs.jobs }} || echo "all waves done"
+          if [ -n "${{ inputs.only }}" ]; then   # the next wave that has bases of the list
+            n=$(python3 - $n "${{ inputs.only }}" <<'PY'
+          import json, sys
+          p = json.load(open("bot/plan.json")); n = int(sys.argv[1])
+          want = {l.split()[0] for l in open(sys.argv[2]) if l.strip() and not l.startswith("#")}
+          while n < len(p["waves"]) and not want & set(p["waves"][n]["bases"]): n += 1
+          print(n)
+          PY
+            )
+            only="-f only=${{ inputs.only }}"
+          fi
+          [ $n -lt ${{ needs.plan.outputs.waves }} ] && gh workflow run build.yml -R ${{ github.repository }} -f wave=$n -f jobs=${{ inputs.jobs }} ${only:-} || echo "all waves done"
