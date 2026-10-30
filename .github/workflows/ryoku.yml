@@ -1,0 +1,48 @@
+# Builds Ryoku (the desktop shell, https://github.com/ryoku-dev/ryoku) once, with Nix, and publishes it as a binary cache tarball
+# in the "shells" release, so `tek-shell-add ryoku` downloads it instead of compiling on the user's PC.
+# Copied to PLAYER99-void/tek-packages as .github/workflows/ryoku.yml. Same pinned nixpkgs and source as tek-shell-add.
+name: ryoku
+on:
+  workflow_dispatch:
+    inputs:
+      version: { description: "Ryoku release tag", default: "v1.0.6" }
+      sha256: { description: "sha256 of its source tarball", default: "083ef8e39cc6da847fb3078c81e548f6200c4978c0124f345772e64454b70edc" }
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = auto
+      - name: Build
+        run: |
+          set -euo pipefail
+          REV=55bfb4d7437bd4e09ab7cba58a43bd68eb310044
+          W=$PWD/src; mkdir -p $W
+          curl -fsSL -o src.tar.gz "https://github.com/ryoku-dev/ryoku/archive/refs/tags/${{ inputs.version }}.tar.gz"
+          echo "${{ inputs.sha256 }}  src.tar.gz" | sha256sum -c -
+          tar -xz -C $W --strip-components=1 -f src.tar.gz
+          # same fixes as tek-shell-add: a path its files no longer contain, and no Go tests (they need a network / IPv6)
+          grep -rl --include='*.nix' -e '--replace-fail' $W | xargs -r sed -i 's/--replace-fail/--replace-quiet/g'
+          sed -i -E 's#^([[:space:]]*)go test .*#\1true#' $W/nix/packages/*.nix
+          : > paths.txt
+          for p in ryoku-shell ryoku-qml ryoku-desktop-data ryoku-cli ryoku-hub ryoku-ryogami; do
+            nix build --no-link --print-out-paths --override-input nixpkgs github:NixOS/nixpkgs/$REV "path:$W#$p" >> paths.txt \
+              || { [ $p = ryoku-hub ] || [ $p = ryoku-ryogami ] || exit 1; echo "optional $p failed"; }
+          done
+          cat paths.txt
+          nix copy --to "file://$PWD/cache?compression=xz" $(cat paths.txt)
+          tar -C cache -cf ryoku-${{ inputs.version }}-x86_64.tar .
+          cp paths.txt ryoku-${{ inputs.version }}.paths
+          sha256sum ryoku-${{ inputs.version }}-x86_64.tar | tee ryoku-${{ inputs.version }}.sha256
+          ls -la ryoku-*
+      - name: Publish
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view shells >/dev/null 2>&1 || gh release create shells -t "Desktop shells (prebuilt)" -n "Prebuilt shells for tek-shell-add."
+          gh release upload shells ryoku-${{ inputs.version }}-x86_64.tar ryoku-${{ inputs.version }}.paths ryoku-${{ inputs.version }}.sha256 --clobber
