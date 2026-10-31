@@ -83,16 +83,15 @@ jobs:
           docker import tek-builder.tar.zst tek-builder
           # The Tek tree keeps git and python in /nix (not in this container): add Ubuntu's git (with the libraries it needs,
           # except glibc: the container's own is newer), a python alias and Arch's arch-meson wrapper. Without them ~1100 bases failed.
-          H=$PWD/hostgit; mkdir -p $H/bin $H/lib $H/libexec
+          S=$PWD/stage; H=$S/opt/hostgit; mkdir -p $H/bin $H/lib $H/libexec $S/usr/bin
           cp /usr/bin/git $H/bin/git-real; cp -r /usr/lib/git-core $H/libexec/git-core; cp -r /usr/share/git-core $H/templates
           ldd /usr/bin/git /usr/lib/git-core/git-remote-https | awk '/=> \//{print $3}' | grep -v -E '/(libc|libm|libdl|libpthread|librt|libresolv)\.so|ld-linux' | sort -u | xargs -I{} cp -L {} $H/lib/
           printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/hostgit/lib GIT_EXEC_PATH=/opt/hostgit/libexec/git-core GIT_TEMPLATE_DIR=/opt/hostgit/templates\nexec /opt/hostgit/bin/git-real "$@"\n' > $H/git
           printf '#!/bin/sh\nexec python3 "$@"\n' > $H/python
           printf '#!/bin/bash\nexec meson setup --prefix /usr --libexecdir lib --sbindir bin --buildtype plain --auto-features enabled --wrap-mode nodownload -D b_lto=true -D b_pie=true "$@"\n' > $H/arch-meson
-          chmod +x $H/git $H/python $H/arch-meson
+          chmod +x $H/git $H/python $H/arch-meson; for t in git python arch-meson; do cp $H/$t $S/usr/bin/$t; done; rm $H/git $H/python $H/arch-meson
           docker create --name tb tek-builder /bin/true
-          docker cp $H tb:/opt/hostgit
-          for t in git python arch-meson; do docker cp $H/$t tb:/usr/bin/$t; done
+          docker cp $S/. tb:/
           docker commit tb tek-builder >/dev/null
           docker run --rm tek-builder sh -c 'git --version && python --version && git ls-remote https://github.com/PLAYER99-void/tek-packages HEAD | head -1'
         env: { GH_TOKEN: "${{ github.token }}" }
