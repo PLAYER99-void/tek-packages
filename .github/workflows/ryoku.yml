@@ -44,5 +44,6 @@ jobs:
       - name: Publish
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          gh release view shells >/dev/null 2>&1 || gh release create shells -t "Desktop shells (prebuilt)" -n "Prebuilt shells for tek-shell-add."
-          gh release upload shells ryoku-${{ inputs.version }}-x86_64.tar ryoku-${{ inputs.version }}.paths ryoku-${{ inputs.version }}.sha256 --clobber
+          R=${{ github.repository }}
+          gh release view shells -R $R >/dev/null 2>&1 || gh release create shells -R $R -t "Desktop shells (prebuilt)" -n "Prebuilt shells for tek-shell-add."
+          gh release upload shells ryoku-${{ inputs.version }}-x86_64.tar ryoku-${{ inputs.version }}.paths ryoku-${{ inputs.version }}.sha256 --clobber -R $R
